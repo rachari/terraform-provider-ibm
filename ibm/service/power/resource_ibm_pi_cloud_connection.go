@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
@@ -224,10 +225,24 @@ func resourceIBMPICloudConnectionCreate(ctx context.Context, d *schema.ResourceD
 	}
 
 	client := st.NewIBMPICloudConnectionClient(ctx, sess, cloudInstanceID)
+	retryCount := 2
 	cloudConnection, cloudConnectionJob, err := client.Create(body)
 	if err != nil {
-		log.Printf("[DEBUG] create cloud connection failed %v", err)
-		return diag.FromErr(err)
+		for count := retryCount; count >= 0; count-- {
+			if err == nil {
+				break
+			}
+			if strings.Contains(err.Error(), "503") {
+				log.Printf("[DEBUG] unable to get vpc details for cloud connection %v", err)
+				time.Sleep(time.Minute)
+				log.Printf("[DEBUG] retrying cloud connection create %v", count)
+				cloudConnection, cloudConnectionJob, err = client.Create(body)
+			}
+		}
+		if err != nil {
+			log.Printf("[DEBUG] create cloud connection failed %v", err)
+			return diag.FromErr(err)
+		}
 	}
 
 	if cloudConnection != nil {
@@ -331,9 +346,24 @@ func resourceIBMPICloudConnectionUpdate(ctx context.Context, d *schema.ResourceD
 			body.Vpc = vpc
 		}
 
+		retryCount := 2
 		_, cloudConnectionJob, err := client.Update(cloudConnectionID, body)
+
 		if err != nil {
-			return diag.FromErr(err)
+			for count := retryCount; count >= 0; count-- {
+				if err == nil {
+					break
+				}
+				if strings.Contains(err.Error(), "503") {
+					log.Printf("[DEBUG] unable to get vpc details for cloud connection %v", err)
+					time.Sleep(time.Minute)
+					log.Printf("[DEBUG] retrying cloud connection update %v", count)
+					_, cloudConnectionJob, err = client.Update(cloudConnectionID, body)
+				}
+			}
+			if err != nil {
+				return diag.FromErr(err)
+			}
 		}
 		if cloudConnectionJob != nil {
 			_, err = waitForIBMPIJobCompleted(ctx, jobClient, *cloudConnectionJob.ID, d.Timeout(schema.TimeoutCreate))
